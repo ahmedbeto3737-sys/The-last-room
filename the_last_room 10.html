@@ -1,0 +1,196 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+<title>THE LAST ROOM</title>
+<style>
+*{box-sizing:border-box}html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#030405;color:#ddd;font-family:monospace;touch-action:none}
+#game{position:fixed;inset:0;width:100%;height:100%;background:#050607}
+#start{display:none!important;position:fixed;z-index:20;inset:0;display:flex;align-items:center;justify-content:center;background:radial-gradient(circle,#171717,#020202 70%);padding:20px}
+.panel{width:min(680px,94vw);padding:34px 25px;text-align:center;background:#050505;border:1px solid #444;box-shadow:0 0 60px #000}
+h1{font-size:clamp(36px,8vw,64px);letter-spacing:8px;margin:0 0 12px}
+p{line-height:1.65;color:#aaa}
+#startBtn{appearance:none;-webkit-appearance:none;position:relative;z-index:30;width:min(420px,90%);min-height:64px;padding:16px;margin:18px 0;font:bold 18px monospace;color:#fff;background:#161616;border:2px solid #888;border-radius:8px}
+#startBtn:active{background:#333;transform:scale(.98)}
+#hud{position:fixed;z-index:5;inset:0;pointer-events:none}
+#title{position:absolute;top:15px;left:18px;letter-spacing:5px;font-size:20px;text-shadow:0 2px 8px #000}
+#obj{position:absolute;left:18px;bottom:18px;line-height:1.5;text-shadow:0 2px 8px #000}
+#msg{position:absolute;top:18%;left:50%;transform:translateX(-50%);text-align:center;font-size:25px;letter-spacing:2px;text-shadow:0 0 18px #000}
+#touch{display:none;position:fixed;z-index:10;inset:0;pointer-events:none}
+#stick{position:absolute;left:22px;bottom:24px;width:135px;height:135px;border:2px solid #777;border-radius:50%;background:#1119;pointer-events:auto}
+#nub{position:absolute;left:43px;top:43px;width:45px;height:45px;border-radius:50%;background:#bbb8}
+#look{position:absolute;right:15px;bottom:20px;width:45vw;height:38vh;max-width:420px;border:1px dashed #7775;border-radius:25px;color:#9997;text-align:center;padding-top:12px;pointer-events:auto}
+.btn{position:absolute;pointer-events:auto;width:72px;height:72px;border-radius:50%;background:#111d;color:#ddd;border:1px solid #777;font:13px monospace}
+#light{right:105px;bottom:34px}#use{right:22px;bottom:118px}#run{right:22px;bottom:34px}
+#rotate{display:none;position:fixed;z-index:50;inset:0;background:#030405;color:#ddd;align-items:center;justify-content:center;text-align:center;font-size:20px;padding:30px}
+@media (pointer:coarse){#touch{display:block}}
+@media (pointer:coarse) and (orientation:portrait){#rotate{display:flex}}
+</style>
+</head>
+<body>
+<canvas id="game"></canvas>
+
+<div id="start" style="display:none">
+ <div class="panel">
+  <h1>THE LAST ROOM</h1>
+  <p>You woke up somewhere you don't remember entering.<br>Find five journal pages and reach the red exit door.<br>Something is moving in the dark.</p>
+  <button id="startBtn" type="button">ENTER THE BUILDING</button>
+  <p>iPad: joystick to move · swipe right side to look · LIGHT · USE · RUN</p>
+ </div>
+</div>
+
+<div id="rotate">ROTATE YOUR IPAD TO LANDSCAPE</div>
+<div id="hud">
+ <div id="title">THE LAST ROOM</div>
+ <div id="msg"></div>
+ <div id="obj">OBJECTIVE: Find 5 journal pages<br>Pages: <span id="count">0</span>/5<br>Then reach the red EXIT.</div>
+</div>
+<div id="touch">
+ <div id="stick"><div id="nub"></div></div>
+ <div id="look">SWIPE HERE TO LOOK</div>
+ <button class="btn" id="light">LIGHT</button>
+ <button class="btn" id="use">USE</button>
+ <button class="btn" id="run">RUN</button>
+</div>
+
+<script>
+(function(){
+"use strict";
+var canvas=document.getElementById("game"), ctx=canvas.getContext("2d");
+var start=document.getElementById("start"), startBtn=document.getElementById("startBtn");
+var started=true, pages=0, yaw=0, pitch=0, flashlight=true, running=false;
+var px=0,pz=24, last=performance.now(), scare=0, won=false;
+var keys={};
+var pagePos=[[-3.7,20],[3.7,9],[-3.7,0],[3.7,-10],[-3.7,-20]];
+var msgTimer=0;
+
+function begin(){
+ started=true;
+ start.style.display="none";
+ document.body.style.background="#000";
+ try{ if(window.AudioContext||window.webkitAudioContext) startAudio(); }catch(e){}
+}
+startBtn.addEventListener("click",function(e){e.preventDefault();begin();});
+startBtn.addEventListener("touchend",function(e){e.preventDefault();begin();},{passive:false});
+document.addEventListener("keydown",function(e){
+ keys[e.code]=true;
+ if(!started && (e.code==="Enter"||e.code==="Space")){e.preventDefault();begin();}
+ if(e.code==="KeyF")flashlight=!flashlight;
+ if(e.code==="KeyE")interact();
+});
+document.addEventListener("keyup",function(e){keys[e.code]=false;});
+
+var moveId=null,mx=0,mz=0,nub=document.getElementById("nub"),stick=document.getElementById("stick");
+function stickSet(x,y){
+ var r=stick.getBoundingClientRect(),dx=x-(r.left+r.width/2),dy=y-(r.top+r.height/2),m=Math.hypot(dx,dy),max=48;
+ if(m>max){dx=dx/m*max;dy=dy/m*max}
+ mx=dx/max;mz=dy/max;nub.style.transform="translate("+dx+"px,"+dy+"px)";
+}
+function stickEnd(){moveId=null;mx=mz=0;nub.style.transform="translate(0,0)"}
+stick.addEventListener("touchstart",function(e){e.preventDefault();var t=e.changedTouches[0];moveId=t.identifier;stickSet(t.clientX,t.clientY)},{passive:false});
+stick.addEventListener("touchmove",function(e){e.preventDefault();for(var i=0;i<e.changedTouches.length;i++){var t=e.changedTouches[i];if(t.identifier===moveId)stickSet(t.clientX,t.clientY)}},{passive:false});
+stick.addEventListener("touchend",function(e){e.preventDefault();stickEnd()},{passive:false});
+stick.addEventListener("touchcancel",stickEnd);
+
+var look=document.getElementById("look"),lookId=null,lx=0,ly=0;
+look.addEventListener("touchstart",function(e){e.preventDefault();var t=e.changedTouches[0];lookId=t.identifier;lx=t.clientX;ly=t.clientY;beginAudio()},{passive:false});
+look.addEventListener("touchmove",function(e){e.preventDefault();for(var i=0;i<e.changedTouches.length;i++){var t=e.changedTouches[i];if(t.identifier===lookId){yaw+=(t.clientX-lx)*.008;pitch-=(t.clientY-ly)*.006;pitch=Math.max(-1.1,Math.min(1.1,pitch));lx=t.clientX;ly=t.clientY}}},{passive:false});
+look.addEventListener("touchend",function(e){e.preventDefault();lookId=null},{passive:false});
+look.addEventListener("touchcancel",function(){lookId=null});
+
+document.getElementById("light").addEventListener("touchstart",function(e){e.preventDefault();flashlight=!flashlight},{passive:false});
+document.getElementById("use").addEventListener("touchstart",function(e){e.preventDefault();interact()},{passive:false});
+document.getElementById("run").addEventListener("touchstart",function(e){e.preventDefault();running=true},{passive:false});
+document.getElementById("run").addEventListener("touchend",function(e){e.preventDefault();running=false},{passive:false});
+document.getElementById("run").addEventListener("touchcancel",function(){running=false});
+
+function interact(){
+ if(!started||won)return;
+ for(var i=0;i<pagePos.length;i++)if(pagePos[i]){
+  if(Math.hypot(px-pagePos[i][0],pz-pagePos[i][1])<1.7){
+   pagePos[i]=null;pages++;document.getElementById("count").textContent=pages;show("THE PAGE IS WARM.");return;
+  }
+ }
+ if(pages===5&&pz<-24){won=true;show("THE LAST ROOM WAS YOU.",6000);}
+}
+function show(s,ms){document.getElementById("msg").innerHTML=s;msgTimer=ms||2200}
+
+var ac=null,master=null;
+function startAudio(){
+ if(ac)return;
+ var A=window.AudioContext||window.webkitAudioContext;if(!A)return;
+ ac=new A();master=ac.createGain();master.gain.value=.035;master.connect(ac.destination);
+ var o=ac.createOscillator(),g=ac.createGain();o.type="sine";o.frequency.value=45;g.gain.value=.7;o.connect(g);g.connect(master);o.start();
+}
+function beginAudio(){if(ac&&ac.state==="suspended")ac.resume()}
+
+function update(dt){
+ if(!started||won)return;
+ var dx=0,dz=0;
+ if(keys.KeyW)dz-=1;if(keys.KeyS)dz+=1;if(keys.KeyA)dx-=1;if(keys.KeyD)dx+=1;
+ dx+=mx;dz+=mz;
+ var len=Math.hypot(dx,dz);if(len>1){dx/=len;dz/=len}
+ var sp=(running||keys.ShiftLeft||keys.ShiftRight)?4.2:2.2;
+ var sy=Math.sin(yaw),cy=Math.cos(yaw);
+ px+=(dx*cy-dz*sy)*sp*dt;pz+=(dx*sy+dz*cy)*sp*dt;
+ px=Math.max(-4.45,Math.min(4.45,px));pz=Math.max(-26.3,Math.min(25.3,pz));
+ scare=Math.max(0,1-Math.abs(pz+6)/9);
+ if(scare>.85&&Math.random()<.012)show("DON'T TURN AROUND.");
+ if(msgTimer>0){msgTimer-=dt*1000;if(msgTimer<=0)document.getElementById("msg").innerHTML=""}
+}
+
+function resize(){var d=Math.min(devicePixelRatio||1,1.5);canvas.width=innerWidth*d;canvas.height=innerHeight*d}
+addEventListener("resize",resize);resize();
+
+function draw(now){
+ var w=canvas.width,h=canvas.height,t=now*.001;
+ ctx.fillStyle="#020304";ctx.fillRect(0,0,w,h);
+ // Corridor perspective
+ var flick=(Math.sin(t*19)>0.75)?0.35:1;
+ var horizon=h*.48;
+ var grad=ctx.createRadialGradient(w/2,h*.48,5,w/2,h*.48,h*.8);
+ grad.addColorStop(0,"#24272a");grad.addColorStop(.45,"#090b0d");grad.addColorStop(1,"#010102");
+ ctx.fillStyle=grad;ctx.fillRect(0,0,w,h);
+ ctx.globalAlpha=.55;
+ // floor tiles
+ for(var z=1;z<18;z++){
+  var yy=horizon+(h-horizon)*(z/18);
+  ctx.strokeStyle="#303338";ctx.beginPath();ctx.moveTo(0,yy);ctx.lineTo(w,yy);ctx.stroke();
+ }
+ for(var x=-6;x<=6;x++){ctx.beginPath();ctx.moveTo(w/2+x*30,horizon);ctx.lineTo(w/2+x*190,h);ctx.stroke()}
+ // walls and lights
+ ctx.globalAlpha=.8;
+ for(var i=0;i<7;i++){
+  var yy=horizon+(h-horizon)*(i/8), ww=90+i*80;
+  ctx.fillStyle="#111316";ctx.fillRect(w/2-ww,yy-12,10,12);ctx.fillRect(w/2+ww-10,yy-12,10,12);
+ }
+ ctx.globalAlpha=1;
+ // exit glow
+ if(pz<-15){ctx.fillStyle="rgba(180,0,0,.35)";ctx.fillRect(w/2-70,horizon-125,140,180)}
+ ctx.fillStyle="#5b0808";ctx.fillRect(w/2-45,horizon-95,90,135);
+ ctx.fillStyle="#e33";ctx.font="bold 16px monospace";ctx.textAlign="center";ctx.fillText("EXIT",w/2,horizon-65);
+ // pages
+ ctx.fillStyle="#ddd";ctx.font="12px monospace";
+ for(var j=0;j<pagePos.length;j++)if(pagePos[j]){
+  var dz=pagePos[j][1]-pz;if(Math.abs(dz)<22){var sx=w/2+(pagePos[j][0]-px)*55/(Math.abs(dz)+3),sy=horizon+Math.min(230,1800/(Math.abs(dz)+2));ctx.fillRect(sx,sy,10,14)}
+ }
+ // entity silhouette, peripheral
+ if(scare>.55){
+  var side=(Math.sin(t*.7)>0)?w*.12:w*.88;
+  var eh=h*.42;
+  ctx.fillStyle="rgba(0,0,0,"+(.55*scare)+")";
+  ctx.beginPath();ctx.ellipse(side,eh,35,95,0,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="rgba(255,20,10,"+(.8*scare)+")";ctx.beginPath();ctx.arc(side-11,eh-25,4,0,7);ctx.arc(side+11,eh-25,4,0,7);ctx.fill();
+ }
+ // flashlight
+ if(flashlight){var g=ctx.createRadialGradient(w/2,h*.56,10,w/2,h*.56,h*.6);g.addColorStop(0,"rgba(220,225,220,.18)");g.addColorStop(1,"rgba(0,0,0,0)");ctx.fillStyle=g;ctx.fillRect(0,0,w,h)}
+ // grain/vignette
+ ctx.fillStyle="rgba(0,0,0,.55)";var v=ctx.createRadialGradient(w/2,h/2,h*.2,w/2,h/2,h*.8);v.addColorStop(0,"rgba(0,0,0,0)");v.addColorStop(1,"rgba(0,0,0,.7)");ctx.fillRect(0,0,w,h);ctx.globalAlpha=1;
+}
+function loop(now){var dt=Math.min(.05,(now-last)/1000);last=now;update(dt);draw(now);requestAnimationFrame(loop)}
+begin(); requestAnimationFrame(loop);
+})();
+</script>
+</body>
+</html>
